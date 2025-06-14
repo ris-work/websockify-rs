@@ -91,60 +91,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warp_websockify::Destination::tcp(matches.value_of("upstream").unwrap()).unwrap()
     };
 
-    let ws = warp::path("websockify").and(warp_websockify::websockify(upstream));
-    let static_file = warp::path("static").and(warp_embed::embed(&NoVnc {}));
-    let prefix = matches.value_of("prefix").unwrap_or("").to_string();
+    // Create a websocket filter without any path restrictions
+    let ws = warp_websockify::websockify(upstream);
 
-    let static_url = format!(
-        "{}{}/static/vnc.html",
-        if prefix.is_empty() { "" } else { "/" },
-        prefix
-    )
-    .parse::<Uri>()
-    .unwrap();
+    // Read the prefix argument, even though we're not using it for routing now.
+    let _prefix = matches.value_of("prefix").unwrap_or("").to_string();
 
-    if matches.is_present("listen-unix") {
-        println!(
-            "URL: unix://{}{}",
-            matches.value_of("listen").unwrap(),
-            static_url
-        );
-    } else {
-        println!(
-            "URL: http://{}{}",
-            matches.value_of("listen").unwrap(),
-            static_url
-        );
-    }
-
-    let server = static_file
-        .with(warp::log("http"))
-        .or(ws.with(warp::log("http")))
-        .or(warp::path::end()
-            .map(move || {
-                let static_url = format!(
-                    "{}{}/static/vnc.html?path={}{}websockify",
-                    if prefix.is_empty() { "" } else { "/" },
-                    prefix,
-                    prefix,
-                    if prefix.is_empty() { "" } else { "/" },
-                )
-                .parse::<Uri>()
-                .unwrap();
-                info!("redirect URL: {}", static_url);
-                warp::redirect(static_url)
-            })
-            .with(warp::log("http")));
-
-    let server = if let Some(x) = matches.value_of("prefix") {
-        warp::path(x.to_string()).and(server).boxed()
-    } else {
-        server.boxed()
-    };
+    // Serve the websocket filter on ANY URL.
+    let server = warp::any().and(ws.with(warp::log("http"))).boxed();
 
     if matches.is_present("listen-unix") {
         #[cfg(unix)]
         {
+            println!(
+                "Websocket server on unix://{}",
+                matches.value_of("listen").unwrap()
+            );
             let listener = UnixListener::bind(matches.value_of("listen").unwrap())?;
             let incoming = UnixListenerStream::new(listener);
             warp::serve(server).run_incoming(incoming).await;
@@ -154,6 +116,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             unimplemented!()
         }
     } else {
+        println!(
+            "Websocket server on http://{}",
+            matches.value_of("listen").unwrap()
+        );
         let listen = matches.value_of("listen").unwrap().to_socket_addrs()?;
 
         let binded: Vec<_> = listen
